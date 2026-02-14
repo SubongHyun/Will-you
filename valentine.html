@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>WILL YOU?</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0b0f14;
+      color: #e8eef6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      overflow: hidden;
+    }
+
+    .center {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: min(520px, 92vw);
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 18px;
+      padding: 26px 22px 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+      text-align: center;
+      backdrop-filter: blur(8px);
+      position: relative;
+      z-index: 2;
+    }
+
+    h1 {
+      margin: 0 0 18px;
+      font-size: 42px;
+      letter-spacing: 0.02em;
+      line-height: 1.1;
+    }
+
+    .buttons {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      margin-top: 18px;
+      position: relative;
+      height: 64px; /* keeps layout stable */
+    }
+
+    button {
+      border: 0;
+      padding: 12px 18px;
+      border-radius: 14px;
+      font-size: 16px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform 120ms ease, opacity 120ms ease;
+    }
+
+    #yesBtn {
+      background: #55d6be;
+      color: #07231e;
+      font-weight: 700;
+    }
+    #yesBtn:hover { transform: translateY(-1px); }
+
+    #noBtn {
+      position: absolute;
+      left: 50%;
+      top: 0;
+      transform: translateX(80px);
+      background: #e24a4a;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .result {
+      margin-top: 16px;
+      font-size: 18px;
+      font-weight: 700;
+      opacity: 0.95;
+      min-height: 26px;
+      padding: 8px 12px;   /* was 12px 18px (from button default) */
+      font-size: 13px;     /* was 16px */
+      border-radius: 12px; /* slightly smaller */
+    }
+
+    .hint {
+      margin-top: 6px;
+      font-size: 12px;
+      opacity: 0.55;
+    }
+
+    /* Confetti canvas sits on top of everything */
+    #confetti {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="confetti"></canvas>
+
+  <div class="center" id="playground">
+    <div class="card">
+      <h1>JIN, WILL YOU BE MY VALENTINE?</h1>
+
+      <div class="buttons" id="buttonArea">
+        <button id="yesBtn">YES</button>
+        <button id="noBtn">NO</button>
+      </div>
+
+      <div class="result" id="result"></div>
+      <div class="hint">NO seems a bit shy 😄</div>
+    </div>
+  </div>
+
+  <script>
+    /* =========================
+       "WILL YOU?" prank page
+       - NO button evades cursor
+       - Confetti on YES click
+       - Comments in English
+       ========================= */
+
+    const playground = document.getElementById("playground");
+    const buttonArea = document.getElementById("buttonArea");
+    const yesBtn = document.getElementById("yesBtn");
+    const noBtn = document.getElementById("noBtn");
+    const result = document.getElementById("result");
+
+    // Track current NO position in pixels (relative to buttonArea)
+    let noPos = { x: 0, y: 0 };
+
+    // Settings (tune these if you want it easier/harder)
+    const EVADE_RADIUS = 120;   // px distance threshold to start evading
+    const STEP_MIN = 90;        // px min jump distance
+    const STEP_MAX = 170;       // px max jump distance
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+    function rand(min, max) { return min + Math.random() * (max - min); }
+
+    function getBounds() {
+      const areaRect = buttonArea.getBoundingClientRect();
+      const noRect = noBtn.getBoundingClientRect();
+
+      // Allowed range for the NO button (keep it inside buttonArea)
+      const maxX = areaRect.width - noRect.width;
+      const maxY = areaRect.height - noRect.height;
+
+      return { areaRect, noRect, maxX, maxY };
+    }
+
+    function setNoPosition(x, y) {
+      noPos.x = x;
+      noPos.y = y;
+      noBtn.style.transform = `translate(${x}px, ${y}px)`;
+    }
+
+    function placeNoInitially() {
+      const { areaRect, noRect, maxX, maxY } = getBounds();
+
+      // Start near the center-right, similar to a normal YES/NO layout
+      const startX = clamp((areaRect.width / 2) + 60, 0, maxX);
+      const startY = clamp(0, 0, maxY);
+
+      // Reset anchor (we fully control translate)
+      noBtn.style.left = "0px";
+      noBtn.style.top = "0px";
+
+      setNoPosition(startX, startY);
+    }
+
+    function distanceToNo(mouseX, mouseY) {
+      const { noRect } = getBounds();
+      const noCenterX = (noRect.left + noRect.right) / 2;
+      const noCenterY = (noRect.top + noRect.bottom) / 2;
+
+      const dx = mouseX - noCenterX;
+      const dy = mouseY - noCenterY;
+      return Math.sqrt(dx*dx + dy*dy);
+    }
+
+    function evade(mouseX, mouseY) {
+      const { areaRect, noRect, maxX, maxY } = getBounds();
+
+      // Direction away from cursor: cursor -> NO center
+      const noCenterX = (noRect.left + noRect.right) / 2;
+      const noCenterY = (noRect.top + noRect.bottom) / 2;
+
+      let dx = noCenterX - mouseX;
+      let dy = noCenterY - mouseY;
+
+      // Normalize; if cursor exactly on center, randomize direction
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) {
+        dx = rand(-1, 1);
+        dy = rand(-1, 1);
+      } else {
+        dx /= len;
+        dy /= len;
+      }
+
+      // Jump distance
+      const step = rand(STEP_MIN, STEP_MAX);
+
+      // Convert NO center screen coords -> area local coords
+      const areaLeft = areaRect.left;
+      const areaTop = areaRect.top;
+
+      const noCenterLocalX = noCenterX - areaLeft;
+      const noCenterLocalY = noCenterY - areaTop;
+
+      // Move center by (dx,dy)*step, then convert back to top-left
+      let newCenterX = noCenterLocalX + dx * step;
+      let newCenterY = noCenterLocalY + dy * step;
+
+      let newX = newCenterX - (noRect.width / 2);
+      let newY = newCenterY - (noRect.height / 2);
+
+      // Add slight randomness so it feels "alive"
+      newX += rand(-18, 18);
+      newY += rand(-10, 10);
+
+      // Clamp within area
+      newX = clamp(newX, 0, maxX);
+      newY = clamp(newY, 0, maxY);
+
+      setNoPosition(newX, newY);
+    }
+
+    // Prevent NO from being clicked (just in case user manages)
+    noBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      result.textContent = "😅";
+      const mx = (e.clientX ?? 0);
+      const my = (e.clientY ?? 0);
+      evade(mx, my);
+    });
+
+    // Mouse move: if cursor gets close, NO evades
+    window.addEventListener("mousemove", (e) => {
+      const d = distanceToNo(e.clientX, e.clientY);
+      if (d < EVADE_RADIUS) evade(e.clientX, e.clientY);
+    });
+
+    // Touch support (mobile)
+    window.addEventListener("touchstart", (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      const d = distanceToNo(t.clientX, t.clientY);
+      if (d < EVADE_RADIUS) evade(t.clientX, t.clientY);
+    }, { passive: true });
+
+    window.addEventListener("touchmove", (e) => {
+      const t = e.touches[0];
+      if (!t) return;
+      const d = distanceToNo(t.clientX, t.clientY);
+      if (d < EVADE_RADIUS) evade(t.clientX, t.clientY);
+    }, { passive: true });
+
+    // Ensure correct initial placement after layout
+    window.addEventListener("load", placeNoInitially);
+    window.addEventListener("resize", placeNoInitially);
+
+    /* ---------- Confetti (Canvas) ---------- */
+    const confettiCanvas = document.getElementById("confetti");
+    const cctx = confettiCanvas.getContext("2d");
+
+    function resizeConfetti() {
+      confettiCanvas.width = window.innerWidth;
+      confettiCanvas.height = window.innerHeight;
+    }
+    window.addEventListener("resize", resizeConfetti);
+    resizeConfetti();
+
+    let confetti = [];
+    let confettiRunning = false;
+    let lastT = performance.now();
+
+    function spawnConfettiBurst(x, y, count) {
+      // Create small rectangles with random velocity and rotation
+      for (let i = 0; i < count; i++) {
+        const angle = rand(-Math.PI, Math.PI);
+        const speed = rand(220, 520);
+        confetti.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - rand(80, 220),
+          w: rand(6, 12),
+          h: rand(8, 16),
+          rot: rand(0, Math.PI),
+          vr: rand(-8, 8),
+          life: rand(1.2, 2.2), // seconds
+          age: 0
+        });
+      }
+    }
+
+    function confettiStep(dt) {
+      const g = 980; // px/s^2
+      for (const p of confetti) {
+        p.age += dt;
+        p.vy += g * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.rot += p.vr * dt;
+      }
+      confetti = confetti.filter(p => p.age < p.life && p.y < confettiCanvas.height + 80);
+    }
+
+    function confettiDraw() {
+      cctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+      for (const p of confetti) {
+        const alpha = 1 - (p.age / p.life);
+        cctx.save();
+        cctx.globalAlpha = Math.max(0, alpha);
+
+        // Use HSL without specifying fixed palette
+        const hue = (p.x * 0.3 + p.y * 0.2) % 360;
+        cctx.fillStyle = `hsl(${hue}, 90%, 60%)`;
+
+        cctx.translate(p.x, p.y);
+        cctx.rotate(p.rot);
+        cctx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
+        cctx.restore();
+      }
+    }
+
+    function confettiLoop(now) {
+      if (!confettiRunning) return;
+
+      const dt = Math.min(0.033, (now - lastT) / 1000);
+      lastT = now;
+
+      confettiStep(dt);
+      confettiDraw();
+
+      if (confetti.length === 0) {
+        confettiRunning = false;
+        cctx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
+        return;
+      }
+
+      requestAnimationFrame(confettiLoop);
+    }
+
+    function startConfettiAtCenter() {
+      resizeConfetti();
+      const x = confettiCanvas.width / 2;
+      const y = confettiCanvas.height * 0.35;
+      spawnConfettiBurst(x, y, 180);
+      spawnConfettiBurst(x - 140, y + 40, 90);
+      spawnConfettiBurst(x + 140, y + 40, 90);
+
+      if (!confettiRunning) {
+        confettiRunning = true;
+        lastT = performance.now();
+        requestAnimationFrame(confettiLoop);
+      }
+    }
+
+    // YES action (confetti + message)
+    yesBtn.addEventListener("click", () => {
+      result.textContent = "🎉 ✅ YES!";
+      startConfettiAtCenter();
+
+      // Optional: disable buttons after YES
+      yesBtn.disabled = true;
+      yesBtn.style.opacity = "0.75";
+    });
+  </script>
+</body>
+</html>
